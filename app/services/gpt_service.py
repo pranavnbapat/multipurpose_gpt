@@ -1,193 +1,67 @@
+# app/services/gpt_service.py
+
 from __future__ import annotations
 
-import os
-import mimetypes
 from typing import Optional
-import json
-import time
-import random
-from openai import OpenAI, OpenAIError, APIConnectionError, RateLimitError, APIStatusError
-from dotenv import load_dotenv
+from app.config.settings import client, settings, choose_prompt
 
-load_dotenv()
-
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-def _to_jsonable(obj):
-    """
-    Best-effort conversion to something JSON serialisable.
-    Works with SDK pydantic models (model_dump), dict-like, or falls back to str.
-    """
-    if obj is None:
-        return None
-    if hasattr(obj, "model_dump"):       # openai >= 1.40 pydantic model
-        return obj.model_dump()
-    if hasattr(obj, "to_dict"):          # some SDKs expose this
-        return obj.to_dict()
-    if isinstance(obj, dict):
-        return obj
-    try:
-        # last resort: let json handle built-ins; default=str for unknowns
-        return json.loads(json.dumps(obj, default=str))
-    except Exception:
-        return str(obj)
-
-
-def _status_from_exc(e: Exception) -> int | None:
-    """
-    Best-effort HTTP status extractor from OpenAI SDK exceptions.
-    Returns None if no HTTP status is available.
-    """
-    # APIStatusError carries .status_code
-    if isinstance(e, APIStatusError):
-        try:
-            return int(getattr(e, "status_code", None))
-        except Exception:
-            return None
-    # Some generic OpenAIError derivatives may expose .status
-    return getattr(e, "status", None)
-
-def _is_retryable(e: Exception) -> bool:
-    """
-    Decide whether an exception should be retried.
-    - Network/connection errors
-    - 429 (rate limit)
-    - 5xx (server errors)
-    """
-    if isinstance(e, (APIConnectionError, RateLimitError)):
-        return True
-    status = _status_from_exc(e)
-    if status is None:
-        return False
-    if status == 429:
-        return True
-    if 500 <= status <= 599:
-        return True
-    return False
 
 def ask_gpt(
     *,
     query: Optional[str] = None,
-    file_bytes: Optional[bytes] = None,
-    file_filename: Optional[str] = None,
-    prompt: str = "You are a helpful assistant.",
-    model: str = "gpt-4o-mini",
-    # Retry knobs
-    max_retries: int = 5,
-    initial_backoff: float = 1.0,   # seconds
-    max_backoff: float = 20.0,      # seconds
-    jitter: float = 0.25,           # +/-25% randomisation
-    delete_uploaded_file: bool = True,
+    prompt: Optional[str] = None,
+    summary_model: Optional[str] = None,
+    max_retries: int = 3,
 ) -> dict:
     """
-    Send optional text + optional file to an OpenAI GPT model via the Responses API and return JSON.
-    Built-in retries for 429/5xx/network errors using exponential backoff with jitter.
+    Text-only GPT call.
+
+    Files (video/audio/docs) are already handled by dedicated services before this is invoked.
+
+    Args:
+        query: User input text (required when no file was uploaded). Must be non-empty after trimming.
+        prompt: System instruction. If empty/None, the server default from `settings` is used via `choose_prompt`.
+        summary_model: The model name to use for the summary; if None, defaults to `settings.summary_model`.
+        max_retries: Number of attempts for transient failures (simple retry loop).
+
     Returns:
-      {
-        "answer": "<model_text>",
-        "model": "<model_name>",
-        "usage": {...}  # when provided by SDK
-      }
+        dict: {"answer": <str>}
+            The plain-text answer from the model.
     """
 
-    # --- inline helpers (kept local to avoid polluting your module) ---
-    def _status_from_exc(e: Exception) -> int | None:
-        if isinstance(e, APIStatusError):
-            try:
-                return int(getattr(e, "status_code", None))
-            except Exception:
-                return None
-        return getattr(e, "status", None)
+    # --- Validate inputs (router already enforces this, but guard anyway) ---
+    if not query or not isinstance(query, str) or not query.strip():
+        raise ValueError("Provide a non-empty query.")
 
-    def _is_retryable(e: Exception) -> bool:
-        if isinstance(e, (APIConnectionError, RateLimitError)):
-            return True
-        s = _status_from_exc(e)
-        if s is None:
-            return False
-        return s == 429 or (500 <= s <= 599)
-
-    # --- validate inputs and build message parts ---
-    content_parts = []
-    if query:
-        content_parts.append({"type": "input_text", "text": query})
-
-    uploaded_file_id = None
-    if file_bytes is not None and file_filename:
-        # Best-effort MIME guess (not required by API; helps with diagnostics)
-        mime_guess, _ = mimetypes.guess_type(file_filename)
-
-        # Upload the file; the SDK accepts (name, bytes) tuple
-        uploaded = _client.files.create(file=(file_filename, file_bytes), purpose="assistants")
-        uploaded_file_id = uploaded.id
-
-        # Attach as an input_file content part
-        # NEW (only the allowed keys)
-        content_parts.append({
-            "type": "input_file",
-            "file_id": uploaded_file_id,
-        })
-
-    if not content_parts:
-        raise ValueError("Provide at least one of query or file.")
+    effective_prompt = choose_prompt(prompt)
+    effective_model = summary_model or settings.summary_model
 
     messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": content_parts},
+        {"role": "system", "content": effective_prompt},
+        {"role": "user", "content": query.strip()},
     ]
 
-    # --- retry loop ---
-    attempt = 0
-    while True:
+    last_err = None
+    for _ in range(max_retries):
         try:
-            resp = _client.responses.create(
-                model=model,
+            resp = client.responses.create(
+                model=effective_model,
                 input=messages,
-                # temperature=0.3,        # uncomment for more deterministic output
-                # max_output_tokens=1200, # set if you want a hard cap
             )
+            answer = (resp.output_text or "").strip()
 
-            # Prefer convenience aggregate text
-            answer = getattr(resp, "output_text", None)
-            if not answer:
-                # Fallback: stitch from content parts if needed
-                answer = ""
-                for item in getattr(resp, "output", []) or []:
-                    if item.get("type") == "message":
-                        for part in item.get("content", []):
-                            if part.get("type") == "output_text":
-                                answer += part.get("text", "")
-                answer = answer.strip()
+            usage = getattr(resp, "usage", None)
+            # normalise usage to a plain dict if available
+            if hasattr(usage, "model_dump"):
+                usage = usage.model_dump()
 
-            usage_raw = getattr(resp, "usage", None)
-            return {
-                "answer": answer,
-                "model": model,
-                "usage": _to_jsonable(usage_raw),
-            }
+            return {"answer": answer}
+            # return {"answer": answer, "model": effective_model, "usage": usage}
+        except Exception as e:
+            last_err = e
+            continue  # simple retry; no backoff to keep it minimal
 
+    # If we’re here, all retries failed
+    raise last_err if last_err else RuntimeError("Unknown error calling Responses API")
 
-        except OpenAIError as e:
-            # Decide if we should retry; if not (or out of retries), raise
-            should_retry = _is_retryable(e) and attempt < max_retries
-            if not should_retry:
-                raise RuntimeError(f"OpenAI call failed after {attempt} retries: {e}") from e
-
-            # Exponential backoff with jitter
-            base = min(max_backoff, initial_backoff * (2 ** attempt))
-            factor = 1.0 + random.uniform(-jitter, jitter)  # 0.75x .. 1.25x by default
-            delay = max(0.1, base * factor)
-            time.sleep(delay)
-            attempt += 1
-
-        finally:
-            # Optional clean-up: remove uploaded file from OpenAI once we're done
-            if uploaded_file_id and delete_uploaded_file:
-                try:
-                    _client.files.delete(uploaded_file_id)
-                except Exception:
-                    # Non-fatal; don't mask the main result/error
-                    pass
-                else:
-                    uploaded_file_id = None  # so we don't try to delete twice on a retry
 
