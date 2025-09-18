@@ -23,6 +23,15 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# --- Ignore common data/docs ---
+*.xls
+*.xlsx
+*.pdf
+*.doc
+*.docx
+*.json
 *.txt
+
+!/requirements.txt
 
 temp/
