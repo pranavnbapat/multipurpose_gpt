@@ -64,4 +64,3 @@ def ask_gpt(
     # If we’re here, all retries failed
     raise last_err if last_err else RuntimeError("Unknown error calling Responses API")
 
-

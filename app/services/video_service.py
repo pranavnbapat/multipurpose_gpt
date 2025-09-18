@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from app.config.settings import settings, client, choose_prompt
+from app.config.settings import settings, client
 
 def summarise_video(
         file_bytes: bytes,
