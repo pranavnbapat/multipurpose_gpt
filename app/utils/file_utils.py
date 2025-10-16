@@ -1,3 +1,5 @@
+# app/utils/file_utils.py
+
 VIDEO_EXTS  = {"mp4", "avi", "mov", "wmv", "mpeg", "mpg", "mkv", "flv", "webm", "3gp", "mts", "m2ts", "vob", "rmvb"}
 TEXT_EXTS   = {"txt", "csv", "tsv", "log", "xml", "json", "yaml", "ini",
                "xls", "xlsx", "ods", "doc", "docx", "odt", "rtf", "ppt", "pptx", "odp",
