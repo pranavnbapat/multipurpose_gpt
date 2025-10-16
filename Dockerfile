@@ -6,7 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tini curl ffmpeg libreoffice-writer libreoffice-calc fonts-dejavu \
+    tini curl \
+    ffmpeg \
+    libreoffice-writer libreoffice-calc fonts-dejavu \
+    imagemagick libheif-examples libheif1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user for security

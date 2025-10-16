@@ -7,13 +7,20 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config.settings import choose_prompt
 from app.models.enums import ModelName
-from app.services.gpt_service import ask_gpt
-from app.services.video_service import summarise_video
 from app.services.audio_service import summarise_audio
 from app.services.doc_service import summarise_document_file
+from app.services.image_service import summarise_image_file
+from app.services.gpt_service import ask_gpt
+from app.services.video_service import summarise_video
 from app.utils.file_utils import extract_ext_category
 
 router = APIRouter()
+
+VISION_MODELS = {"gpt-4o", "gpt-5", "gpt-4o-mini"}
+
+def _is_vision_model(name: str) -> bool:
+    # Allow "-mini" variants if they support vision in your stack
+    return any(name.startswith(m) for m in VISION_MODELS)
 
 @router.get("/healthz")
 def healthz():
@@ -75,10 +82,7 @@ async def ask(
             detail="Selected model is a speech-to-text model. Choose from the models provided."
         )
 
-    ext: str | None = None
     category: str | None = None
-    file_bytes: bytes | None = None
-    filename: str | None = None
 
     # If a file is provided, validate its type and read it
     file_bytes, filename = None, None
@@ -144,13 +148,24 @@ async def ask(
         #     return JSONResponse(content=jsonable_encoder({"summary": summary}))
 
         # --- If it's a document (PDF/Office/Text), call doc service and return immediately ---
-        if file_bytes and category in {"document", "pdf", "text"}:
+        if file_bytes and category == "text":
             summary = await run_in_threadpool(
                 summarise_document_file,
                 file_bytes,
                 filename,
                 prompt,
                 model.value,
+            )
+            return PlainTextResponse(content=summary)
+
+        if file_bytes and category == "image":
+            if not _is_vision_model(model.value):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Model '{model.value}' is not vision-capable. Select a vision model (e.g., gpt-4o or gpt-5)."
+                )
+            summary = await run_in_threadpool(
+                summarise_image_file, file_bytes, filename, prompt, model.value
             )
             return PlainTextResponse(content=summary)
 

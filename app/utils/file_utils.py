@@ -21,6 +21,7 @@ CATEGORY_BY_EXT = (
 
 def extract_ext_category(filename: str) -> tuple[str | None, str | None]:
     name = (filename or "").lower()
+
     for cext in COMPOUND_ARCHIVE_EXTS:
         if name.endswith("." + cext):
             return cext, "archive"
@@ -30,4 +31,7 @@ def extract_ext_category(filename: str) -> tuple[str | None, str | None]:
 
     ext = name.rsplit(".", 1)[-1]
     cat = CATEGORY_BY_EXT.get(ext)
-    return ext, cat if cat else (None, None)
+    if cat:
+        return ext, cat
+    return None, None
+
