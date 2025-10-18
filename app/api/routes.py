@@ -11,6 +11,7 @@ from app.services.audio_service import summarise_audio
 from app.services.doc_service import summarise_document_file
 from app.services.image_service import summarise_image_file
 from app.services.gpt_service import ask_gpt
+from app.services.ollama_service import ask_ollama
 from app.services.video_service import summarise_video
 from app.utils.file_utils import extract_ext_category
 
@@ -105,6 +106,12 @@ async def ask(
     # print("Prompt is: ", prompt)
 
     try:
+        if file_bytes and (model.value == ModelName.deepseek_llm_7b.value):
+            raise HTTPException(
+                status_code=422,
+                detail="DeepSeek (Ollama) is currently enabled for text-only queries. Choose a GPT-* model for file summarisation."
+            )
+
         # --- If it's a video, call video service and return immediately ---
         if file_bytes and category == "video":
             # Run the blocking ffmpeg/transcription pipeline off the event loop
@@ -168,6 +175,13 @@ async def ask(
                 summarise_image_file, file_bytes, filename, prompt, model.value
             )
             return PlainTextResponse(content=summary)
+
+        # --- DeepSeek via Ollama: text-only (no files) ---
+        if (not file_bytes) and (model.value == ModelName.deepseek_llm_7b.value):
+            if not query:
+                raise HTTPException(status_code=422, detail="Provide a non-empty query for the DeepSeek model.")
+            result = ask_ollama(query=query, prompt=prompt)
+            return JSONResponse(content=jsonable_encoder(result))
 
         result = ask_gpt(
             query=query,

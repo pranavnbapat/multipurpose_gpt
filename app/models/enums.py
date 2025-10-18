@@ -7,4 +7,5 @@ class ModelName(str, Enum):
     gpt_4o = "gpt-4o"
     gpt_5_mini = "gpt-5-mini"
     gpt_5 = "gpt-5"
+    deepseek_llm_7b = "deepseek-llm:7b"
 

@@ -1,8 +1,10 @@
 # app/config/settings.py
 
-from openai import OpenAI
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from openai import OpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = PROJECT_ROOT / ".env"
@@ -14,6 +16,15 @@ class Settings(BaseSettings):
     # Model configs
     stt_model: str = "gpt-4o-mini-transcribe"       # speech-to-text model
     summary_model: str = "gpt-4o-mini"
+
+    # --- Ollama / DeepSeek ---
+    ollama_url: str | None = None
+    ollama_model: str = "deepseek-llm:7b"
+    ollama_max_tokens: int = -1
+    ollama_temperature: float = 0.4
+    ollama_num_ctx: int = 4096
+    ollama_top_k: int = 5
+    ollama_max_context_chars: int = 24000
 
     # class Config:
     #     env_file = ".env"   # Load from .env automatically
